@@ -177,18 +177,18 @@
    with real brand specs as they arrive.
    ============================================================ */
 const DEFAULT_STRANDS = [
-  { id: 'wrwc-2025',  sport: 'Rugby',     name: "Women's Rugby World Cup 2025", palette: ['#FFB300','#FF4081','#FF6B35','#FFFFFF'] },
-  { id: 'six-nations',sport: 'Rugby',     name: 'Six Nations',                  palette: ['#003366','#FF0000','#FFFFFF','#000000'] },
-  { id: 'wimbledon',  sport: 'Tennis',    name: 'Wimbledon',                    palette: ['#006633','#552583','#FFFFFF','#FFD700'] },
-  { id: 'fa-cup',     sport: 'Football',  name: 'FA Cup',                       palette: ['#D2122E','#FFFFFF','#1B1B1B','#FFD700'] },
-  { id: 'mtod',       sport: 'Football',  name: 'Match of the Day',             palette: ['#FFCC00','#000000','#1B1B1B','#FFFFFF'] },
-  { id: 'olympics',   sport: 'Olympics',  name: 'Olympic Games',                palette: ['#0085C7','#F4C300','#000000','#009F3D','#DF0024'] },
-  { id: 'open',       sport: 'Golf',      name: 'The Open Championship',        palette: ['#0A2E5D','#FFD700','#FFFFFF','#9CC4E4'] },
-  { id: 'tdf',        sport: 'Cycling',   name: 'Tour de France',               palette: ['#FFEB3B','#000000','#DF0024','#FFFFFF'] },
-  { id: 'hundred',    sport: 'Cricket',   name: 'The Hundred',                  palette: ['#FF1744','#00BFA5','#FFFFFF','#000000'] },
-  { id: 'snooker',    sport: 'Snooker',   name: 'World Snooker',                palette: ['#0E5C2F','#FFFFFF','#FFD700','#9C2424'] },
-  { id: 'athletics',  sport: 'Athletics', name: 'World Athletics',              palette: ['#0033A0','#FFC107','#FFFFFF','#E50046'] },
-  { id: 'darts',      sport: 'Darts',     name: 'World Darts',                  palette: ['#0F2F5F','#E50046','#FFFFFF','#FFD700'] },
+  { id: 'wrwc-2025',  sport: 'Rugby',     name: "Women's Rugby World Cup 2025", palette: ['#FFB300','#FF4081','#FF6B35','#FFFFFF'], brandAssets: {} },
+  { id: 'six-nations',sport: 'Rugby',     name: 'Six Nations',                  palette: ['#003366','#FF0000','#FFFFFF','#000000'], brandAssets: {} },
+  { id: 'wimbledon',  sport: 'Tennis',    name: 'Wimbledon',                    palette: ['#006633','#552583','#FFFFFF','#FFD700'], brandAssets: {} },
+  { id: 'fa-cup',     sport: 'Football',  name: 'FA Cup',                       palette: ['#D2122E','#FFFFFF','#1B1B1B','#FFD700'], brandAssets: {} },
+  { id: 'mtod',       sport: 'Football',  name: 'Match of the Day',             palette: ['#FFCC00','#000000','#1B1B1B','#FFFFFF'], brandAssets: {} },
+  { id: 'olympics',   sport: 'Olympics',  name: 'Olympic Games',                palette: ['#0085C7','#F4C300','#000000','#009F3D','#DF0024'], brandAssets: {} },
+  { id: 'open',       sport: 'Golf',      name: 'The Open Championship',        palette: ['#0A2E5D','#FFD700','#FFFFFF','#9CC4E4'], brandAssets: {} },
+  { id: 'tdf',        sport: 'Cycling',   name: 'Tour de France',               palette: ['#FFEB3B','#000000','#DF0024','#FFFFFF'], brandAssets: {} },
+  { id: 'hundred',    sport: 'Cricket',   name: 'The Hundred',                  palette: ['#FF1744','#00BFA5','#FFFFFF','#000000'], brandAssets: {} },
+  { id: 'snooker',    sport: 'Snooker',   name: 'World Snooker',                palette: ['#0E5C2F','#FFFFFF','#FFD700','#9C2424'], brandAssets: {} },
+  { id: 'athletics',  sport: 'Athletics', name: 'World Athletics',              palette: ['#0033A0','#FFC107','#FFFFFF','#E50046'], brandAssets: {} },
+  { id: 'darts',      sport: 'Darts',     name: 'World Darts',                  palette: ['#0F2F5F','#E50046','#FFFFFF','#FFD700'], brandAssets: {} },
 ];
 
 const STRAND_LS_KEY = 'iplayer-poc-strands-v1';
@@ -198,9 +198,13 @@ const CURRENT_STRAND_LS_KEY = 'iplayer-poc-current-strand-v1';
 function loadStrandsFromStorage() {
   try {
     const raw = localStorage.getItem(STRAND_LS_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const list = JSON.parse(raw);
+      list.forEach(s => { if (!s.brandAssets) s.brandAssets = {}; });
+      return list;
+    }
   } catch {}
-  return DEFAULT_STRANDS.slice();
+  return DEFAULT_STRANDS.map(s => ({ ...s, brandAssets: { ...(s.brandAssets || {}) } }));
 }
 function saveStrandsToStorage() {
   localStorage.setItem(STRAND_LS_KEY, JSON.stringify(STRANDS));
@@ -301,6 +305,60 @@ function addAsset(src, img) {
   const id = 'a' + (assetSeq++);
   assets[id] = { id, src, img, width: img.width, height: img.height };
   return id;
+}
+
+/* Sticky brand assets per strand: a pinned slot's image becomes the
+   default for that slot on every layout for this strand. */
+function pinSlotAsBrandAsset(slotIdx) {
+  const L = doc.layers[slotIdx];
+  if (L.kind !== 'image' || !L.assetId) {
+    alert('Pin only works on image layers. Upload an image first.');
+    return;
+  }
+  const a = assets[L.assetId];
+  const strand = STRANDS.find(s => s.id === currentStrandId); if (!strand) return;
+  strand.brandAssets[slotIdx] = { src: a.src, width: a.width, height: a.height };
+  saveStrandsToStorage();
+  // Apply to every other layout in this strand whose same slot is empty
+  Object.values(states).forEach(other => {
+    if (other.layoutId === doc.layoutId) return;
+    const oL = other.layers[slotIdx];
+    if (!oL.assetId) {
+      oL.kind = 'image'; oL.assetId = L.assetId; oL.text = '';
+      autoPlaceLayer(other, slotIdx);
+    }
+  });
+  renderLayerList(); renderControls();
+}
+
+function unpinBrandAsset(slotIdx) {
+  const strand = STRANDS.find(s => s.id === currentStrandId); if (!strand) return;
+  delete strand.brandAssets[slotIdx];
+  saveStrandsToStorage();
+  renderLayerList(); renderControls();
+}
+
+function applyBrandAssetsToEmptySlots() {
+  const strand = STRANDS.find(s => s.id === currentStrandId); if (!strand) return;
+  Object.entries(strand.brandAssets).forEach(([slotIdxStr, ba]) => {
+    const slotIdx = parseInt(slotIdxStr);
+    // Ensure an asset exists for the brand asset src
+    let assetId = Object.values(assets).find(a => a.src === ba.src)?.id;
+    if (!assetId) {
+      const img = new Image(); img.src = ba.src;
+      assetId = addAsset(ba.src, img);
+      // width/height come from stored metadata to keep autoPlace deterministic
+      assets[assetId].width = ba.width;
+      assets[assetId].height = ba.height;
+    }
+    Object.values(states).forEach(state => {
+      const L = state.layers[slotIdx];
+      if (!L.assetId && !L.text) {
+        L.kind = 'image'; L.assetId = assetId;
+        autoPlaceLayer(state, slotIdx);
+      }
+    });
+  });
 }
 
 let currentLayout = LAYOUTS[0];
@@ -428,6 +486,7 @@ strandPickerEl.onchange = (e) => switchStrand(e.target.value);
 
 function switchStrand(id) {
   loadStrandState(id);
+  applyBrandAssetsToEmptySlots();
   renderBrandPalette();
   renderLayoutButtons();
   buildStage();
@@ -751,6 +810,16 @@ function renderLayerList() {
     vis.title = 'Toggle visibility';
     vis.onclick = () => { L.visible = !L.visible; renderStage(); renderLayerList(); };
     actions.appendChild(vis);
+
+    const strand = STRANDS.find(s => s.id === currentStrandId);
+    const isPinned = strand && strand.brandAssets && strand.brandAssets[idx];
+    const pin = document.createElement('button');
+    pin.className = 'icon-btn';
+    pin.textContent = isPinned ? '📍' : '📌';
+    pin.title = isPinned ? 'Unpin brand asset (will not auto-fill new layouts)' : 'Pin as strand brand asset (auto-fills this slot on every layout)';
+    if (isPinned) pin.style.background = 'var(--accent-2)';
+    pin.onclick = () => isPinned ? unpinBrandAsset(idx) : pinSlotAsBrandAsset(idx);
+    actions.appendChild(pin);
 
     const del = document.createElement('button');
     del.className = 'icon-btn';
@@ -1244,6 +1313,7 @@ window.addEventListener('keydown', (e) => {
    Boot
    ============================================================ */
 loadStrandState(currentStrandId);
+applyBrandAssetsToEmptySlots();
 renderStrandPicker();
 renderBrandPalette();
 renderLayoutButtons();
