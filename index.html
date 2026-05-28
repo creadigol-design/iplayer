@@ -119,13 +119,22 @@
 <body>
 
 <aside class="left">
-  <h3>Layouts</h3>
+  <h3>Strand</h3>
+  <select id="strandPicker" style="width: 100%; padding: 8px; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; font-size: 12px;"></select>
+  <div style="display: flex; gap: 4px; margin-top: 6px;">
+    <button class="btn secondary" id="newStrand" style="flex: 1; font-size: 11px; padding: 6px;">+ New strand</button>
+    <button class="btn secondary" id="renameStrand" style="flex: 0 0 auto; font-size: 11px; padding: 6px 10px;">Rename</button>
+    <button class="btn secondary" id="deleteStrand" style="flex: 0 0 auto; font-size: 11px; padding: 6px 10px;">Delete</button>
+  </div>
+  <div id="brandPalette" style="display: flex; gap: 4px; margin-top: 10px; flex-wrap: wrap;"></div>
+
+  <h3 style="margin-top: 20px;">Layouts</h3>
   <div class="layout-list" id="layoutList"></div>
 
   <h3 style="margin-top: 20px;">About</h3>
   <p style="font-size: 11px; color: var(--muted); line-height: 1.5;">
-    PoC artwork builder. Pick a layout, upload background, talent (transparent PNG) and up to 3 overlays.
-    Drag to position, drag corner handles to resize. Export as JPEG or layered PSD.
+    PoC artwork builder. Pick a strand, pick a layout, compose with image + text layers. Drag to position, corners to resize.
+    Auto-saves to your browser. Export per-layout or bulk as JPEG / PSD.
   </p>
 </aside>
 
@@ -159,7 +168,48 @@
 
 <script>
 /* ============================================================
-   Layout definitions — based on BBC iPlayer Women's RWC frames
+   Strand library — every sport / tournament / brand is a strand.
+   Each strand carries its own brand palette and (in localStorage)
+   its own per-layout project state. Layouts themselves are shared
+   across strands because they reflect iPlayer platform formats.
+   New strands can be added via the UI ("+ New strand") and persist
+   in localStorage. Defaults below are starter examples — extend
+   with real brand specs as they arrive.
+   ============================================================ */
+const DEFAULT_STRANDS = [
+  { id: 'wrwc-2025',  sport: 'Rugby',     name: "Women's Rugby World Cup 2025", palette: ['#FFB300','#FF4081','#FF6B35','#FFFFFF'] },
+  { id: 'six-nations',sport: 'Rugby',     name: 'Six Nations',                  palette: ['#003366','#FF0000','#FFFFFF','#000000'] },
+  { id: 'wimbledon',  sport: 'Tennis',    name: 'Wimbledon',                    palette: ['#006633','#552583','#FFFFFF','#FFD700'] },
+  { id: 'fa-cup',     sport: 'Football',  name: 'FA Cup',                       palette: ['#D2122E','#FFFFFF','#1B1B1B','#FFD700'] },
+  { id: 'mtod',       sport: 'Football',  name: 'Match of the Day',             palette: ['#FFCC00','#000000','#1B1B1B','#FFFFFF'] },
+  { id: 'olympics',   sport: 'Olympics',  name: 'Olympic Games',                palette: ['#0085C7','#F4C300','#000000','#009F3D','#DF0024'] },
+  { id: 'open',       sport: 'Golf',      name: 'The Open Championship',        palette: ['#0A2E5D','#FFD700','#FFFFFF','#9CC4E4'] },
+  { id: 'tdf',        sport: 'Cycling',   name: 'Tour de France',               palette: ['#FFEB3B','#000000','#DF0024','#FFFFFF'] },
+  { id: 'hundred',    sport: 'Cricket',   name: 'The Hundred',                  palette: ['#FF1744','#00BFA5','#FFFFFF','#000000'] },
+  { id: 'snooker',    sport: 'Snooker',   name: 'World Snooker',                palette: ['#0E5C2F','#FFFFFF','#FFD700','#9C2424'] },
+  { id: 'athletics',  sport: 'Athletics', name: 'World Athletics',              palette: ['#0033A0','#FFC107','#FFFFFF','#E50046'] },
+  { id: 'darts',      sport: 'Darts',     name: 'World Darts',                  palette: ['#0F2F5F','#E50046','#FFFFFF','#FFD700'] },
+];
+
+const STRAND_LS_KEY = 'iplayer-poc-strands-v1';
+const STATE_LS_KEY  = (strandId) => `iplayer-poc-state-v1::${strandId}`;
+const CURRENT_STRAND_LS_KEY = 'iplayer-poc-current-strand-v1';
+
+function loadStrandsFromStorage() {
+  try {
+    const raw = localStorage.getItem(STRAND_LS_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return DEFAULT_STRANDS.slice();
+}
+function saveStrandsToStorage() {
+  localStorage.setItem(STRAND_LS_KEY, JSON.stringify(STRANDS));
+}
+const STRANDS = loadStrandsFromStorage();
+let currentStrandId = localStorage.getItem(CURRENT_STRAND_LS_KEY) || STRANDS[0].id;
+
+/* ============================================================
+   Layout definitions — iPlayer platform artwork formats
    ============================================================ */
 /* Safe zones are expressed as proportions [x%, y%, w%, h%] of the canvas.
    They are guides only — never exported. */
@@ -254,23 +304,161 @@ function addAsset(src, img) {
 }
 
 let currentLayout = LAYOUTS[0];
-const states = {}; // layoutId -> layoutState
-LAYOUTS.forEach(l => { states[l.id] = freshLayoutState(l); });
-let doc = states[currentLayout.id];
+let states = {}; // layoutId -> layoutState (for the active strand)
+let doc;
 let zoom = 1;
 
+function freshStatesForStrand() {
+  const s = {};
+  LAYOUTS.forEach(l => { s[l.id] = freshLayoutState(l); });
+  return s;
+}
+
+function loadStrandState(strandId) {
+  // Reset asset library — assets are scoped per strand
+  Object.keys(assets).forEach(k => delete assets[k]);
+  assetSeq = 1;
+
+  let restored = false;
+  try {
+    const raw = localStorage.getItem(STATE_LS_KEY(strandId));
+    if (raw) {
+      const data = JSON.parse(raw);
+      assetSeq = data.assetSeq || 1;
+      Object.values(data.assets || {}).forEach(a => {
+        const img = new Image();
+        img.src = a.src;
+        // Use the data URL — img.complete may be false until decoded; preview will catch up on next render
+        assets[a.id] = { id: a.id, src: a.src, img, width: a.width, height: a.height };
+      });
+      states = {};
+      LAYOUTS.forEach(l => {
+        states[l.id] = data.states?.[l.id] || freshLayoutState(l);
+      });
+      restored = true;
+    }
+  } catch (e) {
+    console.warn('localStorage load failed', e);
+  }
+  if (!restored) states = freshStatesForStrand();
+
+  currentLayout = LAYOUTS[0];
+  doc = states[currentLayout.id];
+  currentStrandId = strandId;
+  localStorage.setItem(CURRENT_STRAND_LS_KEY, strandId);
+}
+
+let autosaveTimer = null;
+function scheduleAutosave() {
+  if (autosaveTimer) return;
+  autosaveTimer = setTimeout(() => {
+    autosaveTimer = null;
+    try {
+      const assetOut = {};
+      Object.values(assets).forEach(a => { assetOut[a.id] = { id: a.id, src: a.src, width: a.width, height: a.height }; });
+      const payload = {
+        version: 1, assetSeq, assets: assetOut,
+        states: Object.fromEntries(Object.entries(states).map(([k, s]) => [k, {
+          layoutId: s.layoutId, w: s.w, h: s.h, layers: s.layers, zOrder: s.zOrder, selectedIdx: s.selectedIdx,
+        }])),
+      };
+      localStorage.setItem(STATE_LS_KEY(currentStrandId), JSON.stringify(payload));
+    } catch (e) {
+      // localStorage quota exceeded — silent so it doesn't spam the user
+      console.warn('autosave failed', e);
+    }
+  }, 600);
+}
+
 /* ============================================================
-   UI: layout sidebar
+   UI: strand picker + layout sidebar
    ============================================================ */
-const layoutListEl = document.getElementById('layoutList');
-LAYOUTS.forEach((l, i) => {
-  const btn = document.createElement('button');
-  btn.className = 'layout-btn' + (i === 0 ? ' active' : '');
-  btn.textContent = l.name;
-  btn.onclick = () => switchLayout(l.id);
-  btn.dataset.id = l.id;
-  layoutListEl.appendChild(btn);
-});
+const strandPickerEl = document.getElementById('strandPicker');
+const brandPaletteEl = document.getElementById('brandPalette');
+const layoutListEl   = document.getElementById('layoutList');
+
+function renderStrandPicker() {
+  strandPickerEl.innerHTML = '';
+  // Group by sport
+  const bySport = {};
+  STRANDS.forEach(s => { (bySport[s.sport] = bySport[s.sport] || []).push(s); });
+  Object.entries(bySport).sort(([a],[b]) => a.localeCompare(b)).forEach(([sport, list]) => {
+    const og = document.createElement('optgroup'); og.label = sport;
+    list.forEach(s => {
+      const o = document.createElement('option');
+      o.value = s.id; o.textContent = s.name; if (s.id === currentStrandId) o.selected = true;
+      og.appendChild(o);
+    });
+    strandPickerEl.appendChild(og);
+  });
+}
+
+function renderBrandPalette() {
+  brandPaletteEl.innerHTML = '';
+  const strand = STRANDS.find(s => s.id === currentStrandId);
+  if (!strand) return;
+  strand.palette.forEach(col => {
+    const sw = document.createElement('button');
+    sw.title = `${col} — click to apply to selected text layer`;
+    sw.style.width = '24px'; sw.style.height = '24px';
+    sw.style.background = col;
+    sw.style.border = '1px solid var(--border)';
+    sw.style.borderRadius = '4px'; sw.style.cursor = 'pointer';
+    sw.onclick = () => {
+      const L = doc.layers[doc.selectedIdx];
+      if (L && L.kind === 'text') { L.color = col; renderStage(); renderControls(); scheduleAutosave(); }
+    };
+    brandPaletteEl.appendChild(sw);
+  });
+}
+
+function renderLayoutButtons() {
+  layoutListEl.innerHTML = '';
+  LAYOUTS.forEach((l) => {
+    const btn = document.createElement('button');
+    btn.className = 'layout-btn' + (l.id === currentLayout.id ? ' active' : '');
+    btn.textContent = l.name;
+    btn.onclick = () => switchLayout(l.id);
+    btn.dataset.id = l.id;
+    layoutListEl.appendChild(btn);
+  });
+}
+
+strandPickerEl.onchange = (e) => switchStrand(e.target.value);
+
+function switchStrand(id) {
+  loadStrandState(id);
+  renderBrandPalette();
+  renderLayoutButtons();
+  buildStage();
+}
+
+document.getElementById('newStrand').onclick = () => {
+  const name = prompt('Strand name (e.g. "Premier League 24/25"):');
+  if (!name) return;
+  const sport = prompt('Sport (e.g. "Football"):', 'Other') || 'Other';
+  const id = 'custom-' + Date.now().toString(36);
+  STRANDS.push({ id, sport, name, palette: ['#FFFFFF','#000000','#FF4081','#FFB300'] });
+  saveStrandsToStorage();
+  renderStrandPicker();
+  switchStrand(id);
+};
+document.getElementById('renameStrand').onclick = () => {
+  const s = STRANDS.find(s => s.id === currentStrandId); if (!s) return;
+  const name = prompt('New strand name:', s.name); if (!name) return;
+  s.name = name; saveStrandsToStorage(); renderStrandPicker();
+};
+document.getElementById('deleteStrand').onclick = () => {
+  if (STRANDS.length <= 1) { alert('Keep at least one strand'); return; }
+  const s = STRANDS.find(s => s.id === currentStrandId); if (!s) return;
+  if (!confirm(`Delete strand "${s.name}" and all its saved work?`)) return;
+  localStorage.removeItem(STATE_LS_KEY(s.id));
+  const idx = STRANDS.indexOf(s); STRANDS.splice(idx, 1);
+  saveStrandsToStorage();
+  const next = STRANDS[0].id;
+  renderStrandPicker();
+  switchStrand(next);
+};
 
 function switchLayout(id) {
   const layout = LAYOUTS.find(l => l.id === id);
@@ -351,6 +539,7 @@ function setZoom(z) {
 let showSafeZones = false;
 
 function renderStage() {
+  scheduleAutosave();
   stageEl.innerHTML = '';
   if (showSafeZones && currentLayout.zones) {
     currentLayout.zones.forEach(z => {
@@ -1054,6 +1243,10 @@ window.addEventListener('keydown', (e) => {
 /* ============================================================
    Boot
    ============================================================ */
+loadStrandState(currentStrandId);
+renderStrandPicker();
+renderBrandPalette();
+renderLayoutButtons();
 buildStage();
 
 // Deselect when clicking empty stage
