@@ -194,7 +194,11 @@ const LAYOUTS = [
    Layer model. Each layout instance has 5 layers in z-order:
    background -> talent -> overlay1 -> overlay2 -> overlay3
    ============================================================ */
-const LAYER_NAMES = ['Background', 'Talent (transparent)', 'Overlay 1', 'Overlay 2', 'Overlay 3'];
+const LAYER_NAMES = [
+  'Background',
+  'Talent (transparent)',
+  'Overlay 1', 'Overlay 2', 'Overlay 3', 'Overlay 4', 'Overlay 5',
+];
 function newLayer(name) {
   return { name, assetId: null, x: 0, y: 0, w: 0, h: 0, rotation: 0, visible: true, touched: false };
 }
