@@ -56,6 +56,16 @@
   .handle.bl { bottom: -7px; left: -7px; cursor: nesw-resize; }
   .handle.br { bottom: -7px; right: -7px; cursor: nwse-resize; }
   .handle.rot { top: -28px; left: 50%; transform: translateX(-50%); background: var(--accent-2); cursor: grab; }
+  .safe-zone {
+    position: absolute; border: 2px dashed rgba(0, 229, 255, 0.6);
+    pointer-events: none; box-sizing: border-box;
+  }
+  .safe-zone .label {
+    position: absolute; top: -22px; left: 0;
+    background: rgba(0, 229, 255, 0.85); color: #000;
+    font-size: 11px; padding: 2px 6px; border-radius: 3px;
+    font-family: monospace; white-space: nowrap;
+  }
 
   h3 { margin: 0 0 10px; font-size: 12px; text-transform: uppercase; color: var(--muted); letter-spacing: 1px; }
   .layout-list { display: flex; flex-direction: column; gap: 4px; }
@@ -126,6 +136,7 @@
     <span class="spacer"></span>
     <button class="btn secondary" id="zoomFit">Fit</button>
     <button class="btn secondary" id="zoomActual">100%</button>
+    <button class="btn secondary" id="toggleZones">Safe zones</button>
     <button class="btn secondary" id="exportJpg">Export JPEG</button>
     <button class="btn secondary" id="exportPsd">Export PSD</button>
     <button class="btn" id="exportAllJpg">All JPEG (zip)</button>
@@ -147,16 +158,36 @@
 /* ============================================================
    Layout definitions — based on BBC iPlayer Women's RWC frames
    ============================================================ */
+/* Safe zones are expressed as proportions [x%, y%, w%, h%] of the canvas.
+   They are guides only — never exported. */
 const LAYOUTS = [
-  { id: 'brand-9x16',     name: 'BRAND - 9x16 Portrait',          w: 1080, h: 1920 },
-  { id: 'brand-logo',     name: 'BRAND - 16x9 Logo Image',         w: 1920, h: 1080 },
-  { id: 'brand-land',     name: 'BRAND - 16x9 Landscape',          w: 1920, h: 1080 },
-  { id: 'h2h',            name: '16x9 Head to Head + Logo',        w: 1920, h: 1080 },
-  { id: 'ep-primary',     name: '16x9 Episode - PRIMARY IMAGE',    w: 1920, h: 1080 },
-  { id: 'imm-live',       name: 'Immersive Hero - Live Match',     w: 1920, h: 1080 },
-  { id: 'deeplink',       name: '16x9 Deeplink (Third Parties)',   w: 1920, h: 1080 },
-  { id: 'highlights',     name: '16x9 Highlights',                 w: 1920, h: 1080 },
-  { id: 'imm-highlights', name: 'Immersive Hero - Highlights',     w: 1920, h: 1080 },
+  { id: 'brand-9x16',     name: 'BRAND - 9x16 Portrait',          w: 1080, h: 1920,
+    zones: [ { label: 'Talent safe',   x: 0.06, y: 0.18, w: 0.88, h: 0.64 },
+             { label: 'Logo lockup',   x: 0.30, y: 0.40, w: 0.40, h: 0.20 } ] },
+  { id: 'brand-logo',     name: 'BRAND - 16x9 Logo Image',         w: 1920, h: 1080,
+    zones: [ { label: 'Logo lockup',   x: 0.35, y: 0.20, w: 0.30, h: 0.60 } ] },
+  { id: 'brand-land',     name: 'BRAND - 16x9 Landscape',          w: 1920, h: 1080,
+    zones: [ { label: 'Talent safe',   x: 0.04, y: 0.10, w: 0.92, h: 0.80 },
+             { label: 'Logo lockup',   x: 0.70, y: 0.30, w: 0.25, h: 0.40 } ] },
+  { id: 'h2h',            name: '16x9 Head to Head + Logo',        w: 1920, h: 1080,
+    zones: [ { label: 'Team A',        x: 0.05, y: 0.10, w: 0.40, h: 0.80 },
+             { label: 'Team B',        x: 0.55, y: 0.10, w: 0.40, h: 0.80 },
+             { label: 'Centre logo',   x: 0.42, y: 0.30, w: 0.16, h: 0.40 } ] },
+  { id: 'ep-primary',     name: '16x9 Episode - PRIMARY IMAGE',    w: 1920, h: 1080,
+    zones: [ { label: 'iPlayer UI',    x: 0.00, y: 0.00, w: 0.40, h: 1.00 },
+             { label: 'Talent safe',   x: 0.45, y: 0.10, w: 0.50, h: 0.80 } ] },
+  { id: 'imm-live',       name: 'Immersive Hero - Live Match',     w: 1920, h: 1080,
+    zones: [ { label: 'Title panel',   x: 0.02, y: 0.10, w: 0.32, h: 0.80 },
+             { label: 'Talent safe',   x: 0.40, y: 0.05, w: 0.55, h: 0.90 } ] },
+  { id: 'deeplink',       name: '16x9 Deeplink (Third Parties)',   w: 1920, h: 1080,
+    zones: [ { label: 'Talent safe',   x: 0.10, y: 0.10, w: 0.80, h: 0.65 },
+             { label: 'iPlayer logo',  x: 0.05, y: 0.78, w: 0.20, h: 0.15 } ] },
+  { id: 'highlights',     name: '16x9 Highlights',                 w: 1920, h: 1080,
+    zones: [ { label: 'Talent safe',   x: 0.05, y: 0.10, w: 0.65, h: 0.80 },
+             { label: 'Team badges',   x: 0.72, y: 0.30, w: 0.25, h: 0.40 } ] },
+  { id: 'imm-highlights', name: 'Immersive Hero - Highlights',     w: 1920, h: 1080,
+    zones: [ { label: 'Title panel',   x: 0.02, y: 0.10, w: 0.32, h: 0.80 },
+             { label: 'Talent safe',   x: 0.40, y: 0.05, w: 0.55, h: 0.90 } ] },
 ];
 
 /* ============================================================
@@ -165,15 +196,35 @@ const LAYOUTS = [
    ============================================================ */
 const LAYER_NAMES = ['Background', 'Talent (transparent)', 'Overlay 1', 'Overlay 2', 'Overlay 3'];
 function newLayer(name) {
-  return { name, assetId: null, x: 0, y: 0, w: 0, h: 0, rotation: 0, visible: true };
+  return { name, assetId: null, x: 0, y: 0, w: 0, h: 0, rotation: 0, visible: true, touched: false };
 }
 function freshLayoutState(layout) {
   return {
     layoutId: layout.id, w: layout.w, h: layout.h,
     layers: LAYER_NAMES.map(newLayer),
-    autoPlaced: {}, // assetId -> true once auto-placed in this layout
     selectedIdx: 0,
   };
+}
+
+/* Proportional sync: when the user moves/resizes a layer on the active layout,
+   push the same proportional position to every OTHER layout whose matching
+   layer hasn't been manually touched yet. */
+function syncLayerProportionally(srcLayoutId, layerIdx) {
+  const src = states[srcLayoutId];
+  const L = src.layers[layerIdx];
+  if (!L.assetId) return;
+  const px = L.x / src.w, py = L.y / src.h;
+  const pw = L.w / src.w, ph = L.h / src.h;
+  Object.values(states).forEach(other => {
+    if (other.layoutId === srcLayoutId) return;
+    const oL = other.layers[layerIdx];
+    if (!oL.assetId || oL.touched) return;
+    oL.x = px * other.w;
+    oL.y = py * other.h;
+    oL.w = pw * other.w;
+    oL.h = ph * other.h;
+    oL.rotation = L.rotation;
+  });
 }
 
 /* Shared asset library — every uploaded image stored once, referenced by id.
@@ -282,8 +333,26 @@ function setZoom(z) {
   stageEl.style.marginBottom = (doc.h * zoom - doc.h) + 'px';
 }
 
+let showSafeZones = false;
+
 function renderStage() {
   stageEl.innerHTML = '';
+  if (showSafeZones && currentLayout.zones) {
+    currentLayout.zones.forEach(z => {
+      const zEl = document.createElement('div');
+      zEl.className = 'safe-zone';
+      zEl.style.left = (z.x * doc.w) + 'px';
+      zEl.style.top = (z.y * doc.h) + 'px';
+      zEl.style.width = (z.w * doc.w) + 'px';
+      zEl.style.height = (z.h * doc.h) + 'px';
+      zEl.style.zIndex = 10000;
+      const lab = document.createElement('div');
+      lab.className = 'label';
+      lab.textContent = z.label;
+      zEl.appendChild(lab);
+      stageEl.appendChild(zEl);
+    });
+  }
   doc.layers.forEach((L, idx) => {
     if (!L.assetId || !L.visible) return;
     const a = assets[L.assetId]; if (!a) return;
@@ -317,6 +386,16 @@ function renderStage() {
 /* ============================================================
    Drag / resize
    ============================================================ */
+const SNAP_THRESHOLD_PX = 8;
+
+function snapValue(target, candidates) {
+  const tol = SNAP_THRESHOLD_PX / zoom;
+  for (const c of candidates) {
+    if (Math.abs(target - c) < tol) return { value: c, hit: true };
+  }
+  return { value: target, hit: false };
+}
+
 function attachDrag(el, idx) {
   el.addEventListener('pointerdown', (e) => {
     e.stopPropagation();
@@ -328,13 +407,32 @@ function attachDrag(el, idx) {
     const aspect = start.w / start.h;
     el.setPointerCapture(e.pointerId);
 
+    const xAnchors = [0, doc.w / 2, doc.w];
+    const yAnchors = [0, doc.h / 2, doc.h];
+
     function move(ev) {
       const dx = (ev.clientX - startX) / zoom;
       const dy = (ev.clientY - startY) / zoom;
+      clearSnapGuides();
       if (!handle) {
-        L.x = start.x + dx; L.y = start.y + dy;
+        // Snap: left edge, right edge, center X
+        let nx = start.x + dx, ny = start.y + dy;
+        const leftSnap = snapValue(nx, xAnchors);
+        const rightSnap = snapValue(nx + L.w, xAnchors);
+        const cxSnap = snapValue(nx + L.w / 2, xAnchors);
+        if (leftSnap.hit) { nx = leftSnap.value; drawSnapGuide('v', nx); }
+        else if (rightSnap.hit) { nx = rightSnap.value - L.w; drawSnapGuide('v', rightSnap.value); }
+        else if (cxSnap.hit) { nx = cxSnap.value - L.w / 2; drawSnapGuide('v', cxSnap.value); }
+
+        const topSnap = snapValue(ny, yAnchors);
+        const botSnap = snapValue(ny + L.h, yAnchors);
+        const cySnap = snapValue(ny + L.h / 2, yAnchors);
+        if (topSnap.hit) { ny = topSnap.value; drawSnapGuide('h', ny); }
+        else if (botSnap.hit) { ny = botSnap.value - L.h; drawSnapGuide('h', botSnap.value); }
+        else if (cySnap.hit) { ny = cySnap.value - L.h / 2; drawSnapGuide('h', cySnap.value); }
+
+        L.x = nx; L.y = ny;
       } else {
-        // resize, keep aspect
         let nw = start.w, nh = start.h, nx = start.x, ny = start.y;
         if (handle === 'br') { nw = start.w + dx; nh = nw / aspect; }
         if (handle === 'tr') { nw = start.w + dx; nh = nw / aspect; ny = start.y + (start.h - nh); }
@@ -343,15 +441,37 @@ function attachDrag(el, idx) {
         if (nw < 20) return;
         L.w = nw; L.h = nh; L.x = nx; L.y = ny;
       }
+      L.touched = true;
+      syncLayerProportionally(doc.layoutId, idx);
       renderStage(); renderControls();
     }
     function up(ev) {
+      clearSnapGuides();
       el.removeEventListener('pointermove', move);
       el.removeEventListener('pointerup', up);
     }
     el.addEventListener('pointermove', move);
     el.addEventListener('pointerup', up);
   });
+}
+
+/* Snap guide overlay — drawn directly inside the stage, removed on drag end */
+function clearSnapGuides() {
+  stageEl.querySelectorAll('.snap-guide').forEach(g => g.remove());
+}
+function drawSnapGuide(orientation, pos) {
+  const g = document.createElement('div');
+  g.className = 'snap-guide';
+  g.style.position = 'absolute';
+  g.style.background = '#00e5ff';
+  g.style.zIndex = 9999;
+  g.style.pointerEvents = 'none';
+  if (orientation === 'v') {
+    g.style.left = pos + 'px'; g.style.top = '0'; g.style.width = '1px'; g.style.height = doc.h + 'px';
+  } else {
+    g.style.top = pos + 'px'; g.style.left = '0'; g.style.height = '1px'; g.style.width = doc.w + 'px';
+  }
+  stageEl.appendChild(g);
 }
 
 /* ============================================================
@@ -427,7 +547,9 @@ function renderControls() {
     inp.type = 'number'; inp.value = Math.round(L[key]);
     inp.oninput = (e) => {
       const v = parseFloat(e.target.value) || 0;
-      L[key] = v; renderStage();
+      L[key] = v; L.touched = true;
+      syncLayerProportionally(doc.layoutId, doc.selectedIdx);
+      renderStage();
     };
     wrap.appendChild(lab); wrap.appendChild(inp);
     grid.appendChild(wrap);
@@ -450,6 +572,22 @@ function renderControls() {
     L.w = a.width; L.h = a.height; renderStage(); renderControls();
   };
   actions.appendChild(reset);
+
+  const untether = document.createElement('button');
+  untether.className = 'btn secondary';
+  untether.textContent = L.touched ? 'Re-link to sync' : 'Linked';
+  untether.title = L.touched
+    ? 'Currently independent — click to re-link to proportional sync'
+    : 'Cross-layout sync is active for this layer';
+  untether.onclick = () => {
+    L.touched = false;
+    // Pull the position from a layout whose layer is the master (any other untouched layout)
+    // Simplest: re-apply sync from another touched layout if one exists; else re-autofit.
+    autoPlaceLayer(doc, doc.selectedIdx);
+    renderStage(); renderControls();
+  };
+  actions.appendChild(untether);
+
   layerControlsEl.appendChild(actions);
 }
 
@@ -598,7 +736,34 @@ document.getElementById('exportAllPsd').onclick = async () => {
 
 document.getElementById('zoomFit').onclick = () => fitZoom();
 document.getElementById('zoomActual').onclick = () => setZoom(1);
+document.getElementById('toggleZones').onclick = (e) => {
+  showSafeZones = !showSafeZones;
+  e.target.classList.toggle('gold', showSafeZones);
+  renderStage();
+};
 window.addEventListener('resize', () => fitZoom());
+
+/* Keyboard nudge for selected layer. Arrow = 1px, Shift+Arrow = 10px */
+window.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  const L = doc.layers[doc.selectedIdx];
+  if (!L || !L.assetId) return;
+  const step = e.shiftKey ? 10 : 1;
+  let handled = true;
+  switch (e.key) {
+    case 'ArrowLeft':  L.x -= step; break;
+    case 'ArrowRight': L.x += step; break;
+    case 'ArrowUp':    L.y -= step; break;
+    case 'ArrowDown':  L.y += step; break;
+    default: handled = false;
+  }
+  if (handled) {
+    e.preventDefault();
+    L.touched = true;
+    syncLayerProportionally(doc.layoutId, doc.selectedIdx);
+    renderStage(); renderControls();
+  }
+});
 
 /* ============================================================
    Boot
