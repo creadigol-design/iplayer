@@ -137,6 +137,9 @@
     <button class="btn secondary" id="zoomFit">Fit</button>
     <button class="btn secondary" id="zoomActual">100%</button>
     <button class="btn secondary" id="toggleZones">Safe zones</button>
+    <button class="btn secondary" id="saveProject">Save .json</button>
+    <label class="btn secondary" for="loadProjectInput" style="cursor: pointer;">Load .json</label>
+    <input type="file" id="loadProjectInput" accept="application/json" style="display:none;">
     <button class="btn secondary" id="exportJpg">Export JPEG</button>
     <button class="btn secondary" id="exportPsd">Export PSD</button>
     <button class="btn" id="exportAllJpg">All JPEG (zip)</button>
@@ -200,12 +203,21 @@ const LAYER_NAMES = [
   'Overlay 1', 'Overlay 2', 'Overlay 3', 'Overlay 4', 'Overlay 5',
 ];
 function newLayer(name) {
-  return { name, assetId: null, x: 0, y: 0, w: 0, h: 0, rotation: 0, visible: true, touched: false };
+  return {
+    name, kind: 'image',
+    assetId: null,
+    x: 0, y: 0, w: 0, h: 0, rotation: 0,
+    opacity: 1, visible: true, touched: false,
+    // text-only fields
+    text: '', fontSize: 96, fontFamily: 'Inter, Arial, sans-serif',
+    fontWeight: 700, color: '#ffffff', align: 'left', lineHeight: 1.1,
+  };
 }
 function freshLayoutState(layout) {
   return {
     layoutId: layout.id, w: layout.w, h: layout.h,
     layers: LAYER_NAMES.map(newLayer),
+    zOrder: LAYER_NAMES.map((_, i) => i), // bottom -> top
     selectedIdx: 0,
   };
 }
@@ -299,7 +311,6 @@ function autoPlaceLayer(state, idx) {
     L.w = a.width * s; L.h = a.height * s;
     L.x = (state.w - L.w) / 2; L.y = (state.h - L.h) / 2;
   }
-  state.autoPlaced[L.assetId + ':' + idx] = true;
 }
 
 /* ============================================================
@@ -357,9 +368,13 @@ function renderStage() {
       stageEl.appendChild(zEl);
     });
   }
-  doc.layers.forEach((L, idx) => {
-    if (!L.assetId || !L.visible) return;
-    const a = assets[L.assetId]; if (!a) return;
+  doc.zOrder.forEach((idx, zPos) => {
+    const L = doc.layers[idx];
+    if (!L.visible) return;
+    const hasContent = (L.kind === 'image' && L.assetId && assets[L.assetId]) ||
+                       (L.kind === 'text' && L.text);
+    if (!hasContent) return;
+
     const el = document.createElement('div');
     el.className = 'layer' + (idx === doc.selectedIdx ? ' selected' : '');
     el.style.left = L.x + 'px';
@@ -367,12 +382,31 @@ function renderStage() {
     el.style.width = L.w + 'px';
     el.style.height = L.h + 'px';
     el.style.transform = `rotate(${L.rotation}deg)`;
-    el.style.zIndex = idx + 1;
+    el.style.zIndex = zPos + 1;
+    el.style.opacity = L.opacity;
     el.dataset.idx = idx;
 
-    const im = document.createElement('img');
-    im.src = a.src;
-    el.appendChild(im);
+    if (L.kind === 'image') {
+      const im = document.createElement('img');
+      im.src = assets[L.assetId].src;
+      el.appendChild(im);
+    } else {
+      const t = document.createElement('div');
+      t.style.width = '100%'; t.style.height = '100%';
+      t.style.color = L.color;
+      t.style.fontFamily = L.fontFamily;
+      t.style.fontWeight = L.fontWeight;
+      t.style.fontSize = L.fontSize + 'px';
+      t.style.lineHeight = L.lineHeight;
+      t.style.textAlign = L.align;
+      t.style.whiteSpace = 'pre-wrap';
+      t.style.wordBreak = 'break-word';
+      t.style.display = 'flex';
+      t.style.alignItems = 'flex-start';
+      t.style.justifyContent = L.align === 'center' ? 'center' : (L.align === 'right' ? 'flex-end' : 'flex-start');
+      t.textContent = L.text;
+      el.appendChild(t);
+    }
 
     if (idx === doc.selectedIdx) {
       ['tl','tr','bl','br'].forEach(pos => {
@@ -486,58 +520,115 @@ const layerControlsEl = document.getElementById('layerControls');
 
 function renderLayerList() {
   layerListEl.innerHTML = '';
-  // top of list = top z-order, so reverse for display
-  [...doc.layers].reverse().forEach((L, displayIdx) => {
-    const idx = doc.layers.length - 1 - displayIdx;
+  // Display top-of-list = top z-order, so iterate zOrder back-to-front
+  for (let zPos = doc.zOrder.length - 1; zPos >= 0; zPos--) {
+    const idx = doc.zOrder[zPos];
+    const L = doc.layers[idx];
     const row = document.createElement('div');
     row.className = 'layer-row' + (idx === doc.selectedIdx ? ' selected' : '');
+
     const head = document.createElement('div');
     head.className = 'row-head';
     const name = document.createElement('div');
     name.className = 'name';
-    name.textContent = L.name;
+    name.textContent = (L.kind === 'text' ? '📝 ' : '') + L.name;
     name.onclick = () => { doc.selectedIdx = idx; renderStage(); renderLayerList(); renderControls(); };
     head.appendChild(name);
 
     const actions = document.createElement('div');
     actions.className = 'actions';
+
+    const upBtn = document.createElement('button');
+    upBtn.className = 'icon-btn';
+    upBtn.textContent = '▲';
+    upBtn.title = 'Move up';
+    upBtn.disabled = zPos === doc.zOrder.length - 1;
+    upBtn.style.opacity = upBtn.disabled ? 0.3 : 1;
+    upBtn.onclick = () => moveZ(zPos, +1);
+    actions.appendChild(upBtn);
+
+    const dnBtn = document.createElement('button');
+    dnBtn.className = 'icon-btn';
+    dnBtn.textContent = '▼';
+    dnBtn.title = 'Move down';
+    dnBtn.disabled = zPos === 0;
+    dnBtn.style.opacity = dnBtn.disabled ? 0.3 : 1;
+    dnBtn.onclick = () => moveZ(zPos, -1);
+    actions.appendChild(dnBtn);
+
     const vis = document.createElement('button');
     vis.className = 'icon-btn';
     vis.textContent = L.visible ? '👁' : '◌';
     vis.title = 'Toggle visibility';
     vis.onclick = () => { L.visible = !L.visible; renderStage(); renderLayerList(); };
     actions.appendChild(vis);
+
     const del = document.createElement('button');
     del.className = 'icon-btn';
     del.textContent = '×';
     del.title = 'Clear layer';
-    del.onclick = () => { L.assetId = null; L.w = 0; L.h = 0; renderStage(); renderLayerList(); renderControls(); };
+    del.onclick = () => {
+      L.assetId = null; L.text = ''; L.kind = 'image'; L.w = 0; L.h = 0;
+      renderStage(); renderLayerList(); renderControls();
+    };
     actions.appendChild(del);
     head.appendChild(actions);
     row.appendChild(head);
 
-    const up = document.createElement('label');
-    up.className = 'upload';
-    up.textContent = L.assetId ? 'Replace image' : 'Upload image';
+    const upload = document.createElement('label');
+    upload.className = 'upload';
+    upload.textContent = (L.kind === 'image' && L.assetId) ? 'Replace image' : 'Upload image';
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'image/*';
     input.onchange = (e) => loadImage(idx, e.target.files[0]);
-    up.appendChild(input);
-    row.appendChild(up);
+    upload.appendChild(input);
+    row.appendChild(upload);
+
+    const txtBtn = document.createElement('button');
+    txtBtn.className = 'icon-btn';
+    txtBtn.style.width = '100%';
+    txtBtn.style.marginTop = '4px';
+    txtBtn.style.padding = '6px';
+    txtBtn.style.fontSize = '11px';
+    txtBtn.textContent = (L.kind === 'text' && L.text) ? 'Edit text' : 'Use as text layer';
+    txtBtn.onclick = () => makeTextLayer(idx);
+    row.appendChild(txtBtn);
 
     layerListEl.appendChild(row);
-  });
+  }
+}
+
+function moveZ(zPos, dir) {
+  const ni = zPos + dir;
+  if (ni < 0 || ni >= doc.zOrder.length) return;
+  const tmp = doc.zOrder[zPos]; doc.zOrder[zPos] = doc.zOrder[ni]; doc.zOrder[ni] = tmp;
+  renderStage(); renderLayerList();
+}
+
+function makeTextLayer(idx) {
+  const L = doc.layers[idx];
+  L.kind = 'text';
+  L.assetId = null;
+  if (!L.text) L.text = 'Title typically 48–60\ncharacters long';
+  if (!L.w || !L.h) {
+    L.w = doc.w * 0.45; L.h = doc.h * 0.30;
+    L.x = doc.w * 0.05; L.y = doc.h * 0.15;
+  }
+  doc.selectedIdx = idx;
+  renderStage(); renderLayerList(); renderControls();
 }
 
 function renderControls() {
   const L = doc.layers[doc.selectedIdx];
-  if (!L || !L.assetId) {
-    layerControlsEl.innerHTML = '<div class="empty-hint">Select a layer with an image to edit position/size</div>';
+  if (!L || !hasContent(L)) {
+    layerControlsEl.innerHTML = '<div class="empty-hint">Select a layer with content to edit position/size</div>';
     return;
   }
-  const a = assets[L.assetId];
+  const a = L.kind === 'image' ? assets[L.assetId] : null;
   layerControlsEl.innerHTML = '';
+
+  // Position / size grid
   const fields = [
     ['X', 'x'], ['Y', 'y'], ['Width', 'w'], ['Height', 'h'], ['Rotation°', 'rotation'],
   ];
@@ -560,22 +651,40 @@ function renderControls() {
   });
   layerControlsEl.appendChild(grid);
 
-  // quick actions
+  // Opacity slider
+  const opacityRow = document.createElement('div');
+  opacityRow.style.marginTop = '10px';
+  const opLab = document.createElement('label');
+  opLab.style.fontSize = '10px'; opLab.style.color = 'var(--muted)';
+  opLab.textContent = `Opacity ${Math.round(L.opacity * 100)}%`;
+  const op = document.createElement('input');
+  op.type = 'range'; op.min = '0'; op.max = '1'; op.step = '0.01'; op.value = L.opacity;
+  op.style.width = '100%';
+  op.oninput = (e) => { L.opacity = parseFloat(e.target.value); opLab.textContent = `Opacity ${Math.round(L.opacity * 100)}%`; renderStage(); };
+  opacityRow.appendChild(opLab); opacityRow.appendChild(op);
+  layerControlsEl.appendChild(opacityRow);
+
+  if (L.kind === 'text') {
+    layerControlsEl.appendChild(textControlsFor(L));
+  }
+
+  // Action buttons
   const actions = document.createElement('div');
   actions.style.marginTop = '10px'; actions.style.display = 'flex'; actions.style.gap = '6px'; actions.style.flexWrap = 'wrap';
-  const fit = document.createElement('button'); fit.className = 'btn secondary'; fit.textContent = 'Fit';
-  fit.onclick = () => fitLayer(L); actions.appendChild(fit);
-  const fill = document.createElement('button'); fill.className = 'btn secondary'; fill.textContent = 'Fill';
-  fill.onclick = () => fillLayer(L); actions.appendChild(fill);
+  if (L.kind === 'image') {
+    const fit = document.createElement('button'); fit.className = 'btn secondary'; fit.textContent = 'Fit';
+    fit.onclick = () => fitLayer(L); actions.appendChild(fit);
+    const fill = document.createElement('button'); fill.className = 'btn secondary'; fill.textContent = 'Fill';
+    fill.onclick = () => fillLayer(L); actions.appendChild(fill);
+  }
   const center = document.createElement('button'); center.className = 'btn secondary'; center.textContent = 'Center';
   center.onclick = () => { L.x = (doc.w - L.w) / 2; L.y = (doc.h - L.h) / 2; renderStage(); renderControls(); };
   actions.appendChild(center);
-  const reset = document.createElement('button'); reset.className = 'btn secondary'; reset.textContent = 'Reset size';
-  reset.onclick = () => {
-    if (!a) return;
-    L.w = a.width; L.h = a.height; renderStage(); renderControls();
-  };
-  actions.appendChild(reset);
+  if (a) {
+    const reset = document.createElement('button'); reset.className = 'btn secondary'; reset.textContent = 'Reset size';
+    reset.onclick = () => { L.w = a.width; L.h = a.height; renderStage(); renderControls(); };
+    actions.appendChild(reset);
+  }
 
   const untether = document.createElement('button');
   untether.className = 'btn secondary';
@@ -585,14 +694,81 @@ function renderControls() {
     : 'Cross-layout sync is active for this layer';
   untether.onclick = () => {
     L.touched = false;
-    // Pull the position from a layout whose layer is the master (any other untouched layout)
-    // Simplest: re-apply sync from another touched layout if one exists; else re-autofit.
     autoPlaceLayer(doc, doc.selectedIdx);
     renderStage(); renderControls();
   };
   actions.appendChild(untether);
 
   layerControlsEl.appendChild(actions);
+}
+
+function textControlsFor(L) {
+  const wrap = document.createElement('div');
+  wrap.style.marginTop = '10px';
+  wrap.style.display = 'flex'; wrap.style.flexDirection = 'column'; wrap.style.gap = '6px';
+
+  const ta = document.createElement('textarea');
+  ta.value = L.text; ta.rows = 3;
+  ta.style.width = '100%'; ta.style.background = '#18181b'; ta.style.color = 'var(--text)';
+  ta.style.border = '1px solid var(--border)'; ta.style.borderRadius = '4px'; ta.style.padding = '6px';
+  ta.style.fontFamily = 'monospace'; ta.style.fontSize = '12px';
+  ta.oninput = (e) => { L.text = e.target.value; renderStage(); };
+  wrap.appendChild(ta);
+
+  const grid = document.createElement('div');
+  grid.style.display = 'grid';
+  grid.style.gridTemplateColumns = '1fr 1fr';
+  grid.style.gap = '6px';
+
+  function fld(label, type, value, oninput, attrs = {}) {
+    const w = document.createElement('div'); w.className = 'control';
+    const lab = document.createElement('label'); lab.textContent = label;
+    const inp = document.createElement('input'); inp.type = type; inp.value = value;
+    Object.entries(attrs).forEach(([k, v]) => inp.setAttribute(k, v));
+    inp.oninput = oninput;
+    w.appendChild(lab); w.appendChild(inp);
+    grid.appendChild(w);
+  }
+  fld('Font size', 'number', L.fontSize, e => { L.fontSize = parseFloat(e.target.value) || 12; renderStage(); }, { min: 8 });
+  fld('Weight (100-900)', 'number', L.fontWeight, e => { L.fontWeight = parseInt(e.target.value) || 400; renderStage(); }, { min: 100, max: 900, step: 100 });
+  fld('Line height', 'number', L.lineHeight, e => { L.lineHeight = parseFloat(e.target.value) || 1; renderStage(); }, { step: 0.05 });
+
+  const colorWrap = document.createElement('div'); colorWrap.className = 'control';
+  const colorLab = document.createElement('label'); colorLab.textContent = 'Colour';
+  const color = document.createElement('input'); color.type = 'color'; color.value = L.color;
+  color.style.height = '28px'; color.style.padding = '0'; color.style.border = '1px solid var(--border)';
+  color.oninput = (e) => { L.color = e.target.value; renderStage(); };
+  colorWrap.appendChild(colorLab); colorWrap.appendChild(color);
+  grid.appendChild(colorWrap);
+
+  const fontWrap = document.createElement('div'); fontWrap.className = 'control';
+  const fontLab = document.createElement('label'); fontLab.textContent = 'Font family';
+  const font = document.createElement('select');
+  font.style.background = '#18181b'; font.style.color = 'var(--text)';
+  font.style.border = '1px solid var(--border)'; font.style.padding = '4px';
+  ['Inter, Arial, sans-serif', 'Arial Black, sans-serif', 'Georgia, serif', 'Impact, sans-serif', 'Helvetica, sans-serif', 'Courier New, monospace'].forEach(f => {
+    const o = document.createElement('option'); o.value = f; o.textContent = f.split(',')[0]; if (f === L.fontFamily) o.selected = true;
+    font.appendChild(o);
+  });
+  font.onchange = (e) => { L.fontFamily = e.target.value; renderStage(); };
+  fontWrap.appendChild(fontLab); fontWrap.appendChild(font);
+  grid.appendChild(fontWrap);
+
+  const alignWrap = document.createElement('div'); alignWrap.className = 'control';
+  const alignLab = document.createElement('label'); alignLab.textContent = 'Align';
+  const align = document.createElement('select');
+  align.style.background = '#18181b'; align.style.color = 'var(--text)';
+  align.style.border = '1px solid var(--border)'; align.style.padding = '4px';
+  ['left', 'center', 'right'].forEach(v => {
+    const o = document.createElement('option'); o.value = v; o.textContent = v; if (v === L.align) o.selected = true;
+    align.appendChild(o);
+  });
+  align.onchange = (e) => { L.align = e.target.value; renderStage(); };
+  alignWrap.appendChild(alignLab); alignWrap.appendChild(align);
+  grid.appendChild(alignWrap);
+
+  wrap.appendChild(grid);
+  return wrap;
 }
 
 function fitLayer(L) {
@@ -620,7 +796,9 @@ function loadImage(idx, file) {
     const img = new Image();
     img.onload = () => {
       const assetId = addAsset(e.target.result, img);
+      doc.layers[idx].kind = 'image';
       doc.layers[idx].assetId = assetId;
+      doc.layers[idx].text = '';
       autoPlaceLayer(doc, idx);
       // Apply to every other layout's same layer slot if currently empty
       Object.values(states).forEach(other => {
@@ -645,15 +823,58 @@ function rasterizeLayer(state, L) {
   const c = document.createElement('canvas');
   c.width = state.w; c.height = state.h;
   const ctx = c.getContext('2d');
-  const a = assets[L.assetId];
-  if (!a || !L.visible) return c;
+  if (!L.visible) return c;
+
   ctx.save();
+  ctx.globalAlpha = L.opacity ?? 1;
   const cx = L.x + L.w / 2, cy = L.y + L.h / 2;
   ctx.translate(cx, cy);
   ctx.rotate((L.rotation * Math.PI) / 180);
-  ctx.drawImage(a.img, -L.w / 2, -L.h / 2, L.w, L.h);
+
+  if (L.kind === 'image') {
+    const a = assets[L.assetId];
+    if (!a) { ctx.restore(); return c; }
+    ctx.drawImage(a.img, -L.w / 2, -L.h / 2, L.w, L.h);
+  } else if (L.kind === 'text' && L.text) {
+    // Word-wrap into the layer box
+    ctx.translate(-L.w / 2, -L.h / 2);
+    ctx.fillStyle = L.color;
+    ctx.font = `${L.fontWeight} ${L.fontSize}px ${L.fontFamily}`;
+    ctx.textBaseline = 'top';
+    ctx.textAlign = L.align;
+    const xAnchor = L.align === 'center' ? L.w / 2 : (L.align === 'right' ? L.w : 0);
+    const lineHeightPx = L.fontSize * L.lineHeight;
+    const lines = wrapText(ctx, L.text, L.w);
+    lines.forEach((line, i) => ctx.fillText(line, xAnchor, i * lineHeightPx));
+  }
+
   ctx.restore();
   return c;
+}
+
+function wrapText(ctx, text, maxWidth) {
+  const paragraphs = text.split('\n');
+  const lines = [];
+  paragraphs.forEach(p => {
+    if (!p) { lines.push(''); return; }
+    const words = p.split(' ');
+    let line = '';
+    words.forEach(w => {
+      const test = line ? line + ' ' + w : w;
+      if (ctx.measureText(test).width > maxWidth && line) {
+        lines.push(line); line = w;
+      } else {
+        line = test;
+      }
+    });
+    if (line) lines.push(line);
+  });
+  return lines;
+}
+
+function hasContent(L) {
+  return (L.kind === 'image' && L.assetId && assets[L.assetId]) ||
+         (L.kind === 'text' && L.text);
 }
 
 function renderStateToCanvas(state) {
@@ -661,8 +882,9 @@ function renderStateToCanvas(state) {
   out.width = state.w; out.height = state.h;
   const ctx = out.getContext('2d');
   ctx.fillStyle = '#000'; ctx.fillRect(0, 0, state.w, state.h);
-  state.layers.forEach(L => {
-    if (!L.assetId || !L.visible) return;
+  state.zOrder.forEach(idx => {
+    const L = state.layers[idx];
+    if (!hasContent(L) || !L.visible) return;
     ctx.drawImage(rasterizeLayer(state, L), 0, 0);
   });
   return out;
@@ -674,12 +896,18 @@ function buildPsdForState(state) {
   const bctx = base.getContext('2d');
   bctx.fillStyle = '#000'; bctx.fillRect(0, 0, state.w, state.h);
   const psd = { width: state.w, height: state.h, children: [{ name: 'Base', canvas: base }] };
-  state.layers.forEach(L => {
-    if (!L.assetId) {
+  state.zOrder.forEach(idx => {
+    const L = state.layers[idx];
+    if (!hasContent(L)) {
       const empty = document.createElement('canvas'); empty.width = state.w; empty.height = state.h;
       psd.children.push({ name: L.name + ' (empty)', canvas: empty });
     } else {
-      psd.children.push({ name: L.name + (L.visible ? '' : ' (hidden)'), canvas: rasterizeLayer(state, L), hidden: !L.visible });
+      psd.children.push({
+        name: L.name + (L.visible ? '' : ' (hidden)'),
+        canvas: rasterizeLayer(state, L),
+        hidden: !L.visible,
+        opacity: L.opacity ?? 1,
+      });
     }
   });
   return psd;
@@ -745,13 +973,67 @@ document.getElementById('toggleZones').onclick = (e) => {
   e.target.classList.toggle('gold', showSafeZones);
   renderStage();
 };
+
+document.getElementById('saveProject').onclick = () => {
+  // Strip non-serializable (img) and convert assets store
+  const assetOut = {};
+  Object.values(assets).forEach(a => {
+    assetOut[a.id] = { id: a.id, src: a.src, width: a.width, height: a.height };
+  });
+  const out = {
+    version: 1, assets: assetOut, assetSeq,
+    currentLayoutId: currentLayout.id,
+    states: Object.fromEntries(Object.entries(states).map(([k, s]) => [k, {
+      layoutId: s.layoutId, w: s.w, h: s.h,
+      layers: s.layers, zOrder: s.zOrder, selectedIdx: s.selectedIdx,
+    }])),
+  };
+  const blob = new Blob([JSON.stringify(out)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'iplayer-artwork-project.json';
+  a.click();
+};
+
+document.getElementById('loadProjectInput').onchange = (e) => {
+  const file = e.target.files[0]; if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    try {
+      const data = JSON.parse(ev.target.result);
+      if (data.version !== 1) throw new Error('Unsupported file version');
+      // Reset assets
+      Object.keys(assets).forEach(k => delete assets[k]);
+      assetSeq = data.assetSeq || 1;
+      const pending = [];
+      Object.values(data.assets || {}).forEach(a => {
+        const img = new Image();
+        const p = new Promise(res => {
+          img.onload = () => { assets[a.id] = { id: a.id, src: a.src, img, width: a.width, height: a.height }; res(); };
+        });
+        img.src = a.src;
+        pending.push(p);
+      });
+      Promise.all(pending).then(() => {
+        Object.keys(states).forEach(k => delete states[k]);
+        Object.entries(data.states).forEach(([k, s]) => { states[k] = s; });
+        currentLayout = LAYOUTS.find(l => l.id === data.currentLayoutId) || LAYOUTS[0];
+        doc = states[currentLayout.id];
+        document.querySelectorAll('.layout-btn').forEach(b => b.classList.toggle('active', b.dataset.id === currentLayout.id));
+        buildStage();
+      });
+    } catch (err) { alert('Failed to load project: ' + err.message); }
+  };
+  reader.readAsText(file);
+  e.target.value = ''; // reset so same file can re-load
+};
 window.addEventListener('resize', () => fitZoom());
 
 /* Keyboard nudge for selected layer. Arrow = 1px, Shift+Arrow = 10px */
 window.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
   const L = doc.layers[doc.selectedIdx];
-  if (!L || !L.assetId) return;
+  if (!L || !hasContent(L)) return;
   const step = e.shiftKey ? 10 : 1;
   let handled = true;
   switch (e.key) {
