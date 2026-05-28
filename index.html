@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>iPlayer Artwork Builder — PoC</title>
 <script src="https://cdn.jsdelivr.net/npm/ag-psd@24.0.0/dist/bundle.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <style>
   :root {
     --bg: #1c1c1f;
@@ -125,8 +126,10 @@
     <span class="spacer"></span>
     <button class="btn secondary" id="zoomFit">Fit</button>
     <button class="btn secondary" id="zoomActual">100%</button>
-    <button class="btn" id="exportJpg">Export JPEG</button>
-    <button class="btn gold" id="exportPsd">Export PSD</button>
+    <button class="btn secondary" id="exportJpg">Export JPEG</button>
+    <button class="btn secondary" id="exportPsd">Export PSD</button>
+    <button class="btn" id="exportAllJpg">All JPEG (zip)</button>
+    <button class="btn gold" id="exportAllPsd">All PSD (zip)</button>
   </div>
   <div class="stage-wrap" id="stageWrap">
     <div class="stage" id="stage"></div>
@@ -160,25 +163,33 @@ const LAYOUTS = [
    Layer model. Each layout instance has 5 layers in z-order:
    background -> talent -> overlay1 -> overlay2 -> overlay3
    ============================================================ */
+const LAYER_NAMES = ['Background', 'Talent (transparent)', 'Overlay 1', 'Overlay 2', 'Overlay 3'];
 function newLayer(name) {
-  return { name, src: null, img: null, x: 0, y: 0, w: 0, h: 0, rotation: 0, visible: true };
+  return { name, assetId: null, x: 0, y: 0, w: 0, h: 0, rotation: 0, visible: true };
 }
-function freshDoc(layout) {
+function freshLayoutState(layout) {
   return {
     layoutId: layout.id, w: layout.w, h: layout.h,
-    layers: [
-      newLayer('Background'),
-      newLayer('Talent (transparent)'),
-      newLayer('Overlay 1'),
-      newLayer('Overlay 2'),
-      newLayer('Overlay 3'),
-    ],
+    layers: LAYER_NAMES.map(newLayer),
+    autoPlaced: {}, // assetId -> true once auto-placed in this layout
     selectedIdx: 0,
   };
 }
 
+/* Shared asset library — every uploaded image stored once, referenced by id.
+   That way switching layouts (or running "Export All") reuses the same files. */
+const assets = {}; // id -> { id, src, img, width, height }
+let assetSeq = 1;
+function addAsset(src, img) {
+  const id = 'a' + (assetSeq++);
+  assets[id] = { id, src, img, width: img.width, height: img.height };
+  return id;
+}
+
 let currentLayout = LAYOUTS[0];
-let doc = freshDoc(currentLayout);
+const states = {}; // layoutId -> layoutState
+LAYOUTS.forEach(l => { states[l.id] = freshLayoutState(l); });
+let doc = states[currentLayout.id];
 let zoom = 1;
 
 /* ============================================================
@@ -198,30 +209,42 @@ function switchLayout(id) {
   const layout = LAYOUTS.find(l => l.id === id);
   if (!layout) return;
   currentLayout = layout;
-  // Keep existing images by porting layers across if possible
-  const old = doc;
-  doc = freshDoc(layout);
-  old.layers.forEach((L, i) => {
-    if (L.src) {
-      const img = new Image();
-      img.onload = () => {
-        // Re-center / scale to fit
-        const newL = doc.layers[i];
-        newL.src = L.src; newL.img = img;
-        if (i === 0) {
-          newL.w = layout.w; newL.h = layout.h; newL.x = 0; newL.y = 0;
-        } else {
-          const scale = Math.min(layout.w / img.width, layout.h / img.height) * 0.6;
-          newL.w = img.width * scale; newL.h = img.height * scale;
-          newL.x = (layout.w - newL.w) / 2; newL.y = (layout.h - newL.h) / 2;
-        }
-        renderStage();
-      };
-      img.src = L.src;
-    }
+  doc = states[layout.id];
+
+  // For any layer that has an asset on the previous layout but not this one,
+  // copy the assetId across with an auto-placement. Lets a user upload once and see it everywhere.
+  Object.values(states).forEach(otherState => {
+    if (otherState === doc) return;
+    otherState.layers.forEach((srcL, i) => {
+      const dstL = doc.layers[i];
+      if (srcL.assetId && !dstL.assetId) {
+        dstL.assetId = srcL.assetId;
+        autoPlaceLayer(doc, i);
+      }
+    });
   });
+
   document.querySelectorAll('.layout-btn').forEach(b => b.classList.toggle('active', b.dataset.id === id));
   buildStage();
+}
+
+function autoPlaceLayer(state, idx) {
+  const L = state.layers[idx];
+  if (!L.assetId) return;
+  const a = assets[L.assetId];
+  if (!a) return;
+  if (idx === 0) {
+    // background -> fill
+    const s = Math.max(state.w / a.width, state.h / a.height);
+    L.w = a.width * s; L.h = a.height * s;
+    L.x = (state.w - L.w) / 2; L.y = (state.h - L.h) / 2;
+  } else {
+    // others -> fit at 60%
+    const s = Math.min(state.w / a.width, state.h / a.height) * 0.6;
+    L.w = a.width * s; L.h = a.height * s;
+    L.x = (state.w - L.w) / 2; L.y = (state.h - L.h) / 2;
+  }
+  state.autoPlaced[L.assetId + ':' + idx] = true;
 }
 
 /* ============================================================
@@ -262,7 +285,8 @@ function setZoom(z) {
 function renderStage() {
   stageEl.innerHTML = '';
   doc.layers.forEach((L, idx) => {
-    if (!L.src || !L.visible) return;
+    if (!L.assetId || !L.visible) return;
+    const a = assets[L.assetId]; if (!a) return;
     const el = document.createElement('div');
     el.className = 'layer' + (idx === doc.selectedIdx ? ' selected' : '');
     el.style.left = L.x + 'px';
@@ -274,7 +298,7 @@ function renderStage() {
     el.dataset.idx = idx;
 
     const im = document.createElement('img');
-    im.src = L.src;
+    im.src = a.src;
     el.appendChild(im);
 
     if (idx === doc.selectedIdx) {
@@ -363,14 +387,14 @@ function renderLayerList() {
     del.className = 'icon-btn';
     del.textContent = '×';
     del.title = 'Clear layer';
-    del.onclick = () => { L.src = null; L.img = null; L.w = 0; L.h = 0; renderStage(); renderLayerList(); renderControls(); };
+    del.onclick = () => { L.assetId = null; L.w = 0; L.h = 0; renderStage(); renderLayerList(); renderControls(); };
     actions.appendChild(del);
     head.appendChild(actions);
     row.appendChild(head);
 
     const up = document.createElement('label');
     up.className = 'upload';
-    up.textContent = L.src ? 'Replace image' : 'Upload image';
+    up.textContent = L.assetId ? 'Replace image' : 'Upload image';
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'image/*';
@@ -384,10 +408,11 @@ function renderLayerList() {
 
 function renderControls() {
   const L = doc.layers[doc.selectedIdx];
-  if (!L || !L.src) {
+  if (!L || !L.assetId) {
     layerControlsEl.innerHTML = '<div class="empty-hint">Select a layer with an image to edit position/size</div>';
     return;
   }
+  const a = assets[L.assetId];
   layerControlsEl.innerHTML = '';
   const fields = [
     ['X', 'x'], ['Y', 'y'], ['Width', 'w'], ['Height', 'h'], ['Rotation°', 'rotation'],
@@ -421,24 +446,24 @@ function renderControls() {
   actions.appendChild(center);
   const reset = document.createElement('button'); reset.className = 'btn secondary'; reset.textContent = 'Reset size';
   reset.onclick = () => {
-    if (!L.img) return;
-    L.w = L.img.width; L.h = L.img.height; renderStage(); renderControls();
+    if (!a) return;
+    L.w = a.width; L.h = a.height; renderStage(); renderControls();
   };
   actions.appendChild(reset);
   layerControlsEl.appendChild(actions);
 }
 
 function fitLayer(L) {
-  if (!L.img) return;
-  const s = Math.min(doc.w / L.img.width, doc.h / L.img.height);
-  L.w = L.img.width * s; L.h = L.img.height * s;
+  const a = assets[L.assetId]; if (!a) return;
+  const s = Math.min(doc.w / a.width, doc.h / a.height);
+  L.w = a.width * s; L.h = a.height * s;
   L.x = (doc.w - L.w) / 2; L.y = (doc.h - L.h) / 2;
   renderStage(); renderControls();
 }
 function fillLayer(L) {
-  if (!L.img) return;
-  const s = Math.max(doc.w / L.img.width, doc.h / L.img.height);
-  L.w = L.img.width * s; L.h = L.img.height * s;
+  const a = assets[L.assetId]; if (!a) return;
+  const s = Math.max(doc.w / a.width, doc.h / a.height);
+  L.w = a.width * s; L.h = a.height * s;
   L.x = (doc.w - L.w) / 2; L.y = (doc.h - L.h) / 2;
   renderStage(); renderControls();
 }
@@ -452,19 +477,17 @@ function loadImage(idx, file) {
   reader.onload = (e) => {
     const img = new Image();
     img.onload = () => {
-      const L = doc.layers[idx];
-      L.src = e.target.result; L.img = img;
-      if (idx === 0) {
-        // background -> fill stage
-        const s = Math.max(doc.w / img.width, doc.h / img.height);
-        L.w = img.width * s; L.h = img.height * s;
-        L.x = (doc.w - L.w) / 2; L.y = (doc.h - L.h) / 2;
-      } else {
-        // others -> fit at 60% of stage
-        const s = Math.min(doc.w / img.width, doc.h / img.height) * 0.6;
-        L.w = img.width * s; L.h = img.height * s;
-        L.x = (doc.w - L.w) / 2; L.y = (doc.h - L.h) / 2;
-      }
+      const assetId = addAsset(e.target.result, img);
+      doc.layers[idx].assetId = assetId;
+      autoPlaceLayer(doc, idx);
+      // Apply to every other layout's same layer slot if currently empty
+      Object.values(states).forEach(other => {
+        if (other === doc) return;
+        if (!other.layers[idx].assetId) {
+          other.layers[idx].assetId = assetId;
+          autoPlaceLayer(other, idx);
+        }
+      });
       doc.selectedIdx = idx;
       renderStage(); renderLayerList(); renderControls();
     };
@@ -476,68 +499,100 @@ function loadImage(idx, file) {
 /* ============================================================
    Export — JPEG (flatten) + PSD (layered via ag-psd)
    ============================================================ */
-function rasterizeLayer(L) {
-  // Render rotated/scaled layer onto a doc-sized canvas
+function rasterizeLayer(state, L) {
   const c = document.createElement('canvas');
-  c.width = doc.w; c.height = doc.h;
+  c.width = state.w; c.height = state.h;
   const ctx = c.getContext('2d');
-  if (!L.img || !L.visible) return c;
+  const a = assets[L.assetId];
+  if (!a || !L.visible) return c;
   ctx.save();
   const cx = L.x + L.w / 2, cy = L.y + L.h / 2;
   ctx.translate(cx, cy);
   ctx.rotate((L.rotation * Math.PI) / 180);
-  ctx.drawImage(L.img, -L.w / 2, -L.h / 2, L.w, L.h);
+  ctx.drawImage(a.img, -L.w / 2, -L.h / 2, L.w, L.h);
   ctx.restore();
   return c;
 }
 
-document.getElementById('exportJpg').onclick = () => {
+function renderStateToCanvas(state) {
   const out = document.createElement('canvas');
-  out.width = doc.w; out.height = doc.h;
+  out.width = state.w; out.height = state.h;
   const ctx = out.getContext('2d');
-  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, doc.w, doc.h);
-  doc.layers.forEach(L => {
-    if (!L.img || !L.visible) return;
-    const lc = rasterizeLayer(L);
-    ctx.drawImage(lc, 0, 0);
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, state.w, state.h);
+  state.layers.forEach(L => {
+    if (!L.assetId || !L.visible) return;
+    ctx.drawImage(rasterizeLayer(state, L), 0, 0);
   });
-  out.toBlob((blob) => {
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `${currentLayout.id}.jpg`;
-    a.click();
-  }, 'image/jpeg', 0.92);
+  return out;
+}
+
+function buildPsdForState(state) {
+  const base = document.createElement('canvas');
+  base.width = state.w; base.height = state.h;
+  const bctx = base.getContext('2d');
+  bctx.fillStyle = '#000'; bctx.fillRect(0, 0, state.w, state.h);
+  const psd = { width: state.w, height: state.h, children: [{ name: 'Base', canvas: base }] };
+  state.layers.forEach(L => {
+    if (!L.assetId) {
+      const empty = document.createElement('canvas'); empty.width = state.w; empty.height = state.h;
+      psd.children.push({ name: L.name + ' (empty)', canvas: empty });
+    } else {
+      psd.children.push({ name: L.name + (L.visible ? '' : ' (hidden)'), canvas: rasterizeLayer(state, L), hidden: !L.visible });
+    }
+  });
+  return psd;
+}
+
+function blobFromCanvas(canvas, type = 'image/jpeg', q = 0.92) {
+  return new Promise(res => canvas.toBlob(b => res(b), type, q));
+}
+
+document.getElementById('exportJpg').onclick = async () => {
+  const canvas = renderStateToCanvas(doc);
+  const blob = await blobFromCanvas(canvas);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${currentLayout.id}.jpg`;
+  a.click();
 };
 
 document.getElementById('exportPsd').onclick = () => {
   if (!window.agPsd) { alert('PSD library not loaded'); return; }
-  const psd = {
-    width: doc.w, height: doc.h,
-    children: []
-  };
-  // Background colour layer at bottom (PSDs need at least one visible base)
-  const bg = document.createElement('canvas');
-  bg.width = doc.w; bg.height = doc.h;
-  const bgCtx = bg.getContext('2d');
-  bgCtx.fillStyle = '#000'; bgCtx.fillRect(0, 0, doc.w, doc.h);
-  psd.children.push({ name: 'Base', canvas: bg });
-
-  doc.layers.forEach(L => {
-    if (!L.img || !L.visible) {
-      // include hidden as empty layer so layer count matches expectations
-      const empty = document.createElement('canvas');
-      empty.width = doc.w; empty.height = doc.h;
-      psd.children.push({ name: L.name + (L.visible ? '' : ' (hidden)'), canvas: empty, hidden: !L.visible });
-      return;
-    }
-    psd.children.push({ name: L.name, canvas: rasterizeLayer(L) });
-  });
-
-  const buffer = window.agPsd.writePsd(psd);
+  const buffer = window.agPsd.writePsd(buildPsdForState(doc));
   const blob = new Blob([buffer], { type: 'application/octet-stream' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = `${currentLayout.id}.psd`;
+  a.click();
+};
+
+document.getElementById('exportAllJpg').onclick = async () => {
+  const zip = new JSZip();
+  for (const layout of LAYOUTS) {
+    const state = states[layout.id];
+    const canvas = renderStateToCanvas(state);
+    const blob = await blobFromCanvas(canvas, 'image/jpeg', 0.92);
+    zip.file(`${layout.id}.jpg`, blob);
+  }
+  const out = await zip.generateAsync({ type: 'blob' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(out);
+  a.download = 'artwork-all-jpeg.zip';
+  a.click();
+};
+
+document.getElementById('exportAllPsd').onclick = async () => {
+  if (!window.agPsd) { alert('PSD library not loaded'); return; }
+  const zip = new JSZip();
+  for (const layout of LAYOUTS) {
+    const state = states[layout.id];
+    const buffer = window.agPsd.writePsd(buildPsdForState(state));
+    zip.file(`${layout.id}.psd`, buffer);
+  }
+  const out = await zip.generateAsync({ type: 'blob' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(out);
+  a.download = 'artwork-all-psd.zip';
   a.click();
 };
 
