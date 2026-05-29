@@ -287,16 +287,21 @@ function syncLayerProportionally(srcLayoutId, layerIdx) {
   const src = states[srcLayoutId];
   const L = src.layers[layerIdx];
   if (!L.assetId) return;
-  const px = L.x / src.w, py = L.y / src.h;
-  const pw = L.w / src.w, ph = L.h / src.h;
+  /* Track the LAYER'S CENTRE proportionally, and use a single uniform
+     scale (geometric mean of canvas-area ratio) so width and height
+     scale together — preserving the asset's aspect ratio across
+     differently-shaped layouts. */
+  const pcx = (L.x + L.w / 2) / src.w;
+  const pcy = (L.y + L.h / 2) / src.h;
   Object.values(states).forEach(other => {
     if (other.layoutId === srcLayoutId) return;
     const oL = other.layers[layerIdx];
     if (!oL.assetId || oL.touched) return;
-    oL.x = px * other.w;
-    oL.y = py * other.h;
-    oL.w = pw * other.w;
-    oL.h = ph * other.h;
+    const scale = Math.sqrt((other.w * other.h) / (src.w * src.h));
+    oL.w = L.w * scale;
+    oL.h = L.h * scale;
+    oL.x = pcx * other.w - oL.w / 2;
+    oL.y = pcy * other.h - oL.h / 2;
     oL.rotation = L.rotation;
   });
 }
