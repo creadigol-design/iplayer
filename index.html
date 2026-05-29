@@ -287,6 +287,18 @@ function syncLayerProportionally(srcLayoutId, layerIdx) {
   const src = states[srcLayoutId];
   const L = src.layers[layerIdx];
   if (!L.assetId) return;
+  /* Background (idx 0) covers the canvas, so its dimensions are layout-
+     specific — never mirror them across layouts. Each layout re-fills
+     independently via autoPlaceLayer. */
+  if (layerIdx === 0) {
+    Object.values(states).forEach(other => {
+      if (other.layoutId === srcLayoutId) return;
+      const oL = other.layers[0];
+      if (!oL.assetId || oL.touched) return;
+      autoPlaceLayer(other, 0);
+    });
+    return;
+  }
   /* Track the LAYER'S CENTRE proportionally, and use a single uniform
      scale (geometric mean of canvas-area ratio) so width and height
      scale together — preserving the asset's aspect ratio across
@@ -594,6 +606,15 @@ function switchLayout(id) {
       }
     });
   });
+
+  /* Heal an untouched background whose dimensions don't fill the canvas
+     (e.g. left behind by an old sync from a different-aspect layout). */
+  const bg = doc.layers[0];
+  if (bg.assetId && !bg.touched) {
+    const fillsX = bg.w + bg.x >= doc.w - 1 && bg.x <= 1;
+    const fillsY = bg.h + bg.y >= doc.h - 1 && bg.y <= 1;
+    if (!fillsX || !fillsY) autoPlaceLayer(doc, 0);
+  }
 
   document.querySelectorAll('.layout-btn').forEach(b => b.classList.toggle('active', b.dataset.id === id));
   buildStage();
