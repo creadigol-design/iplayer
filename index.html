@@ -737,13 +737,14 @@ function snapValue(target, candidates) {
 function attachDrag(el, idx) {
   el.addEventListener('pointerdown', (e) => {
     e.stopPropagation();
-    doc.selectedIdx = idx; renderStage(); renderLayerList(); renderControls();
-    const L = doc.layers[idx];
     const handle = e.target.dataset && e.target.dataset.handle;
+    doc.selectedIdx = idx; renderStage(); renderLayerList(); renderControls();
+    /* Note: renderStage() above detaches `el`, so capture/listen on window
+       instead of `el` — otherwise the move/up events never reach us. */
+    const L = doc.layers[idx];
     const startX = e.clientX, startY = e.clientY;
     const start = { x: L.x, y: L.y, w: L.w, h: L.h };
-    const aspect = start.w / start.h;
-    el.setPointerCapture(e.pointerId);
+    const aspect = start.w / start.h || 1;
 
     const xAnchors = [0, doc.w / 2, doc.w];
     const yAnchors = [0, doc.h / 2, doc.h];
@@ -753,7 +754,6 @@ function attachDrag(el, idx) {
       const dy = (ev.clientY - startY) / zoom;
       clearSnapGuides();
       if (!handle) {
-        // Snap: left edge, right edge, center X
         let nx = start.x + dx, ny = start.y + dy;
         const leftSnap = snapValue(nx, xAnchors);
         const rightSnap = snapValue(nx + L.w, xAnchors);
@@ -783,13 +783,16 @@ function attachDrag(el, idx) {
       syncLayerProportionally(doc.layoutId, idx);
       renderStage(); renderControls();
     }
-    function up(ev) {
+    function up() {
       clearSnapGuides();
-      el.removeEventListener('pointermove', move);
-      el.removeEventListener('pointerup', up);
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
+      scheduleAutosave();
     }
-    el.addEventListener('pointermove', move);
-    el.addEventListener('pointerup', up);
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
   });
 }
 
