@@ -126,7 +126,11 @@
     <button class="btn secondary" id="renameStrand" style="flex: 0 0 auto; font-size: 11px; padding: 6px 10px;">Rename</button>
     <button class="btn secondary" id="deleteStrand" style="flex: 0 0 auto; font-size: 11px; padding: 6px 10px;">Delete</button>
   </div>
-  <div id="brandPalette" style="display: flex; gap: 4px; margin-top: 10px; flex-wrap: wrap;"></div>
+  <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px;">
+    <span style="font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em;">Brand palette</span>
+    <button class="btn secondary" id="paletteEditToggle" style="font-size: 10px; padding: 3px 8px;">Edit</button>
+  </div>
+  <div id="brandPalette" style="display: flex; gap: 4px; margin-top: 6px; flex-wrap: wrap; align-items: center;"></div>
 
   <h3 style="margin-top: 20px;">Layouts</h3>
   <div class="layout-list" id="layoutList"></div>
@@ -451,24 +455,72 @@ function renderStrandPicker() {
   });
 }
 
+let paletteEditMode = false;
+
 function renderBrandPalette() {
   brandPaletteEl.innerHTML = '';
   const strand = STRANDS.find(s => s.id === currentStrandId);
   if (!strand) return;
-  strand.palette.forEach(col => {
-    const sw = document.createElement('button');
-    sw.title = `${col} — click to apply to selected text layer`;
-    sw.style.width = '24px'; sw.style.height = '24px';
-    sw.style.background = col;
-    sw.style.border = '1px solid var(--border)';
-    sw.style.borderRadius = '4px'; sw.style.cursor = 'pointer';
-    sw.onclick = () => {
-      const L = doc.layers[doc.selectedIdx];
-      if (L && L.kind === 'text') { L.color = col; renderStage(); renderControls(); scheduleAutosave(); }
-    };
-    brandPaletteEl.appendChild(sw);
+  strand.palette.forEach((col, i) => {
+    if (paletteEditMode) {
+      const wrap = document.createElement('span');
+      wrap.style.cssText = 'position: relative; display: inline-block;';
+      const picker = document.createElement('input');
+      picker.type = 'color';
+      picker.value = normalizeHex(col);
+      picker.title = 'Change colour';
+      picker.style.cssText = 'width: 28px; height: 28px; padding: 0; border: 1px solid var(--border); border-radius: 4px; cursor: pointer; background: none;';
+      picker.oninput = () => { strand.palette[i] = picker.value.toUpperCase(); saveStrandsToStorage(); };
+      picker.onchange = () => { strand.palette[i] = picker.value.toUpperCase(); saveStrandsToStorage(); renderBrandPalette(); };
+      const rm = document.createElement('button');
+      rm.textContent = '×';
+      rm.title = 'Remove colour';
+      rm.style.cssText = 'position: absolute; top: -6px; right: -6px; width: 14px; height: 14px; border-radius: 50%; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); cursor: pointer; font-size: 10px; line-height: 1; padding: 0;';
+      rm.onclick = () => { strand.palette.splice(i, 1); saveStrandsToStorage(); renderBrandPalette(); };
+      wrap.appendChild(picker); wrap.appendChild(rm);
+      brandPaletteEl.appendChild(wrap);
+    } else {
+      const sw = document.createElement('button');
+      sw.title = `${col} — click to apply to selected text layer`;
+      sw.style.width = '24px'; sw.style.height = '24px';
+      sw.style.background = col;
+      sw.style.border = '1px solid var(--border)';
+      sw.style.borderRadius = '4px'; sw.style.cursor = 'pointer';
+      sw.onclick = () => {
+        const L = doc.layers[doc.selectedIdx];
+        if (L && L.kind === 'text') { L.color = col; renderStage(); renderControls(); scheduleAutosave(); }
+      };
+      brandPaletteEl.appendChild(sw);
+    }
   });
+  if (paletteEditMode) {
+    const add = document.createElement('button');
+    add.textContent = '+';
+    add.title = 'Add colour';
+    add.style.cssText = 'width: 28px; height: 28px; border-radius: 4px; background: var(--panel-2); color: var(--text); border: 1px dashed var(--border); cursor: pointer; font-size: 14px; line-height: 1;';
+    add.onclick = () => {
+      strand.palette.push('#FFFFFF');
+      saveStrandsToStorage(); renderBrandPalette();
+    };
+    brandPaletteEl.appendChild(add);
+  }
 }
+
+function normalizeHex(c) {
+  if (typeof c !== 'string') return '#000000';
+  const m = c.match(/^#([0-9A-Fa-f]{3,8})$/);
+  if (!m) return '#000000';
+  let h = m[1];
+  if (h.length === 3) h = h.split('').map(x => x + x).join('');
+  if (h.length === 8) h = h.slice(0, 6);
+  return '#' + h.toUpperCase();
+}
+
+document.getElementById('paletteEditToggle').onclick = (e) => {
+  paletteEditMode = !paletteEditMode;
+  e.target.textContent = paletteEditMode ? 'Done' : 'Edit';
+  renderBrandPalette();
+};
 
 function renderLayoutButtons() {
   layoutListEl.innerHTML = '';
